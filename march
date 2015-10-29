@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if [ -z $MARCH_RUBY_COMMAND ]; then
+    MARCH_RUBY_COMMAND=ruby
+fi
+
+$MARCH_RUBY_COMMAND $(dirname $0)/march.rb $*
