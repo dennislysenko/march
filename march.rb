@@ -75,13 +75,15 @@ when :deploy
     system("/bin/bash -c \"GOOS=#{os} go build -o march/build/#{os}\"")
   end
 
+  remote_assets_path = "#{deploy_path}/assets"
+
   puts 'writing launch script...'
   # Write the launch script
   env_string = env.to_a.map { |pair| pair.join('=') }.join(' ')
   script = <<-eos
   #!/bin/bash
   while true; do
-    #{env_string} #{deploy_path}/#{go_binary_name} 2>&1 > #{deploy_path}/#{go_binary_name}.log
+    MARCH_ASSETS_PATH=#{remote_assets_path} #{env_string} #{deploy_path}/#{go_binary_name} 2>&1 > #{deploy_path}/#{go_binary_name}.log
   done
   eos
   local_launch_script_path = "march/build/#{go_binary_name}.sh"
@@ -119,6 +121,11 @@ when :deploy
                      local_launch_script_path,
                      "#{deploy_path}/#{go_binary_name}.sh", # destination
                      ssh: { port: server['port'] })
+
+    puts 'copying assets...'
+    Net::SCP.upload!(server['host'], server['user'],
+                    'assets', remote_assets_path,
+                    ssh: { port: server['port'] }, recursive: true)
 
     puts 'starting ssh session...'
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
