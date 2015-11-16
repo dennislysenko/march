@@ -106,6 +106,8 @@ when :deploy
 
       kill_first_match_for "#{deploy_path}/#{go_binary_name}.sh", ssh # kill the parent script
       kill_first_match_for "#{deploy_path}/#{go_binary_name}", ssh # kill the child executable
+
+      ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
     end
 
     puts 'uploading binary...'
