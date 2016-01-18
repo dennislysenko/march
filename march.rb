@@ -93,20 +93,29 @@ when :deploy
   puts 'uploading...'
   current_stage_servers.each do |server|
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
-      def kill_first_match_for(str, ssh)
-        output = ssh.exec!("ps aux | grep \"#{str}\"")
+      def kill_first_match_for(matcher, ssh)
+        output = find_matches_for(matcher, ssh)
         pid_matches = output.match(/[1-9]\d+/)
         # puts stdout
         # puts pid_matches
         unless pid_matches.nil?
-          puts 'killing existing instance...'
+          puts "killing existing instance of #{matcher}..."
           pid = pid_matches.to_a.first
           ssh.exec!("kill -9 #{pid}")
         end
       end
 
-      kill_first_match_for "#{deploy_path}/#{go_binary_name}.sh", ssh # kill the parent script
-      kill_first_match_for "#{deploy_path}/#{go_binary_name}", ssh # kill the child executable
+      def find_matches_for(matcher, ssh)
+        ssh.exec!("ps aux | grep \"#{matcher}\" | grep -v \"grep #{matcher}\"")
+      end
+
+      def kill_all_processes_matching(matcher, ssh)
+        kill_first_match_for(matcher, ssh) until find_matches_for(matcher, ssh).empty?
+      end
+
+      kill_all_processes_matching "#{deploy_path}/#{go_binary_name}.sh$", ssh # kill the parent script
+      kill_all_processes_matching "#{deploy_path}/#{go_binary_name}$", ssh # kill the child executable
+      kill_all_processes_matching "#{deploy_path}/#{go_binary_name}.log$", ssh # kill all log processes
 
       ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
     end
