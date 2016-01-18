@@ -83,7 +83,8 @@ when :deploy
   script = <<-eos
   #!/bin/bash
   while true; do
-    MARCH_ASSETS_PATH=#{remote_assets_path} #{env_string} #{deploy_path}/#{go_binary_name} 2>&1 > #{deploy_path}/#{go_binary_name}.log
+    echo "Starting #{go_binary_name} process..." >> #{deploy_path}/#{go_binary_name}.log
+    MARCH_ASSETS_PATH=#{remote_assets_path} #{env_string} #{deploy_path}/#{go_binary_name} 2>&1 >> #{deploy_path}/#{go_binary_name}.log
   done
   eos
   local_launch_script_path = "march/build/#{go_binary_name}.sh"
