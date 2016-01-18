@@ -136,10 +136,12 @@ when :deploy
                      "#{deploy_path}/#{go_binary_name}.sh", # destination
                      ssh: { port: server['port'] })
 
-    puts 'copying assets...'
-    Net::SCP.upload!(server['host'], server['user'],
-                    'assets', remote_assets_path,
-                    ssh: { port: server['port'] }, recursive: true)
+    if Dir.exists? 'assets'
+      puts 'copying assets...'
+      Net::SCP.upload!(server['host'], server['user'],
+                      'assets', remote_assets_path,
+                      ssh: { port: server['port'] }, recursive: true)
+    end
 
     puts 'starting ssh session...'
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
