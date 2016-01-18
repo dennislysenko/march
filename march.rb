@@ -93,6 +93,8 @@ when :deploy
   puts 'uploading...'
   current_stage_servers.each do |server|
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
+      ssh.exec! "mkdir -p #{deploy_path}"
+
       def kill_first_match_for(matcher, ssh)
         output = find_matches_for(matcher, ssh)
         pid_matches = output.match(/[1-9]\d+/)
