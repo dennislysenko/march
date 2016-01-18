@@ -159,13 +159,30 @@ when :deploy
   puts 'successfully deployed, check logs for more details'
 when :logs
   server = current_stage_servers.first
-  Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
-    stdout = ''
-    ssh.exec!("tail -f -n 50 #{deploy_path}/#{go_binary_name}.log") do |channel, stream, data|
-      stdout << data if stream == :stdout
+  begin
+    session = nil
+    channel = nil
+
+    trap 'INT' do
+      session.shutdown!
+      exit!
     end
 
-    puts stdout
+    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
+      session = ssh
+
+      stdout = ''
+      channel = ssh.exec("tail -f -n 50 #{deploy_path}/#{go_binary_name}.log") do |ch, stream, data|
+        stdout << data if stream == :stdout
+      end
+      channel.wait
+
+      puts stdout
+    end
+  rescue SystemExit, Interrupt
+    puts 'Received sigint. Aborting.'
+    session.shutdown!
+    exit!
   end
 else
   raise 'Invalid command; this should never execute as the validation should have stopped this above'
