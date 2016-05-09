@@ -171,13 +171,10 @@ when :logs
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
       session = ssh
 
-      stdout = ''
       channel = ssh.exec("tail -f -n 50 #{deploy_path}/#{go_binary_name}.log") do |ch, stream, data|
-        stdout << data if stream == :stdout
+        puts data if stream == :stdout
       end
       channel.wait
-
-      puts stdout
     end
   rescue SystemExit, Interrupt
     puts 'Received sigint. Aborting.'
