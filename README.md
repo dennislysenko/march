@@ -67,3 +67,4 @@ repository.
   option to send a SIGKILL after a certain amount of time.
 - Limit max length of log files (once it is over N lines, archive it to a separate logs/ directory so you can still 
     browse historical logs but don't have to sift through a bunch of them unless you want to)
+- Option or requirement to build binary from a branch specified in config for stage instead of just the current working tree 
