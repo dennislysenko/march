@@ -63,8 +63,7 @@ repository.
 - Deploy versioning (capistrano-style)
     - rollback to previous deploys
 - Zero-downtime deployment
-- Reevaluate how march kills already-running processes, right now it terminates them completely off-hand
-    - maybe send an interrupt allowing the server to shut down gracefully, and terminate the process after a set, 
-    `config.yml`-specifiable amount of time
+- March currently kills the child process with a SIGINT not a SIGKILL, but maybe there should be a config-specifiable
+  option to send a SIGKILL after a certain amount of time.
 - Limit max length of log files (once it is over N lines, archive it to a separate logs/ directory so you can still 
     browse historical logs but don't have to sift through a bunch of them unless you want to)

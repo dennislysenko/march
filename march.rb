@@ -95,7 +95,7 @@ when :deploy
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
       ssh.exec! "mkdir -p #{deploy_path}"
 
-      def kill_first_match_for(matcher, ssh)
+      def signal_first_match_for(matcher, ssh, signal)
         output = find_matches_for(matcher, ssh)
         pid_matches = output.match(/[1-9]\d+/)
         # puts stdout
@@ -103,7 +103,7 @@ when :deploy
         unless pid_matches.nil?
           puts "killing existing instance of #{matcher}..."
           pid = pid_matches.to_a.first
-          ssh.exec!("kill -9 #{pid}")
+          ssh.exec!("kill #{signal} #{pid}")
         end
       end
 
@@ -111,13 +111,21 @@ when :deploy
         ssh.exec!("ps aux | grep \"#{matcher}\" | grep -v \"grep #{matcher}\"")
       end
 
-      def kill_all_processes_matching(matcher, ssh)
-        kill_first_match_for(matcher, ssh) until find_matches_for(matcher, ssh).empty?
+      def signal_all_processes_matching(matcher, ssh, signal)
+        signal_first_match_for(matcher, ssh, signal) until find_matches_for(matcher, ssh).empty?
       end
 
-      kill_all_processes_matching "#{deploy_path}/#{go_binary_name}.sh$", ssh # kill the parent script
-      kill_all_processes_matching "#{deploy_path}/#{go_binary_name}$", ssh # kill the child executable
-      kill_all_processes_matching "#{deploy_path}/#{go_binary_name}.log$", ssh # kill all log processes
+      def sigkill_all_processes_matching(matcher, ssh)
+        signal_all_processes_matching matcher, ssh, '-9'
+      end
+
+      def sigint_all_processes_matching(matcher, ssh)
+        signal_all_processes_matching matcher, ssh, '-2'
+      end
+
+      sigkill_all_processes_matching "#{deploy_path}/#{go_binary_name}.sh$", ssh # kill the parent script to prevent the child restarting when we interrupt it
+      sigint_all_processes_matching "#{deploy_path}/#{go_binary_name}$", ssh # interrupt the child script
+      sigkill_all_processes_matching "#{deploy_path}/#{go_binary_name}.log$", ssh # kill all log processes started by march
 
       ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
     end
