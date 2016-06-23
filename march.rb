@@ -2,6 +2,7 @@ require 'yaml'
 require 'set'
 require 'net/scp'
 require 'net/ssh'
+require 'tempfile'
 
 current_stage_name = ARGV[0]
 if current_stage_name.nil?
@@ -63,6 +64,22 @@ end
 
 puts current_stage_servers
 
+def get_deploy_timestamp(deploy_path, server)
+  tempfile = Tempfile.new('deploy_name')
+  Net::SCP.download!(server['host'], server['user'],
+                     "#{deploy_path}/existing_deploy_timestamp", tempfile.path,
+                     ssh: { port: server['port'] }, recursive: true)
+  contents = tempfile.read
+  # coalesce empty string to nil
+  if contents == ''
+    nil
+  else
+    contents
+  end
+rescue Net::SCP::Error
+  nil
+end
+
 case command.to_sym
 when :deploy
   puts 'deploying...'
@@ -75,7 +92,8 @@ when :deploy
     system("/bin/bash -c \"GOOS=#{os} go build -o march/build/#{os}\"")
   end
 
-  remote_assets_path = "#{deploy_path}/assets"
+  new_deploy_timestamp = Time.now.to_i.to_s
+  remote_assets_path = "#{deploy_path}/#{new_deploy_timestamp}/assets"
 
   puts 'writing launch script...'
   # Write the launch script
@@ -83,8 +101,8 @@ when :deploy
   script = <<-eos
   #!/bin/bash
   while true; do
-    echo "Starting #{go_binary_name} process..." >> #{deploy_path}/#{go_binary_name}.log
-    MARCH_ASSETS_PATH=#{remote_assets_path} #{env_string} #{deploy_path}/#{go_binary_name} 2>&1 >> #{deploy_path}/#{go_binary_name}.log
+    echo "Starting #{go_binary_name} process..." >> #{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.log
+    MARCH_ASSETS_PATH=#{remote_assets_path} #{env_string} #{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name} 2>&1 >> #{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.log
   done
   eos
   local_launch_script_path = "march/build/#{go_binary_name}.sh"
@@ -92,14 +110,40 @@ when :deploy
 
   puts 'uploading...'
   current_stage_servers.each do |server|
-    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
-      ssh.exec! "mkdir -p #{deploy_path}"
+    existing_deploy_timestamp = get_deploy_timestamp(deploy_path, server)
 
+    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
+      ssh.exec! "mkdir -p #{deploy_path}/#{new_deploy_timestamp}"
+
+      # ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
+    end
+
+    puts 'uploading binary...'
+    local_binary_path = "march/build/#{server['go_os']}"
+    remote_binary_path = "#{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}"
+    puts "#{local_binary_path} => #{remote_binary_path}"
+    Net::SCP.upload!(server['host'], server['user'],
+                     local_binary_path, remote_binary_path,
+                     ssh: { port: server['port'] })
+
+    puts 'uploading launch script...'
+    Net::SCP.upload!(server['host'], server['user'],
+                     local_launch_script_path,
+                     "#{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.sh", # destination
+                     ssh: { port: server['port'] })
+
+    if Dir.exists? 'assets'
+      puts 'copying assets...'
+      Net::SCP.upload!(server['host'], server['user'],
+                       'assets', remote_assets_path,
+                       ssh: { port: server['port'] }, recursive: true)
+    end
+
+    puts 'starting ssh session...'
+    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
       def signal_first_match_for(matcher, ssh, signal)
         output = find_matches_for(matcher, ssh)
         pid_matches = output.match(/[1-9]\d+/)
-        # puts stdout
-        # puts pid_matches
         unless pid_matches.nil?
           puts "killing existing instance of #{matcher}..."
           pid = pid_matches.to_a.first
@@ -123,43 +167,24 @@ when :deploy
         signal_all_processes_matching matcher, ssh, '-2'
       end
 
-      sigkill_all_processes_matching "#{deploy_path}/#{go_binary_name}.sh$", ssh # kill the parent script to prevent the child restarting when we interrupt it
-      sigint_all_processes_matching "#{deploy_path}/#{go_binary_name}$", ssh # interrupt the child script
-      sigkill_all_processes_matching "#{deploy_path}/#{go_binary_name}.log$", ssh # kill all log processes started by march
+      unless existing_deploy_timestamp.nil?
+        sigkill_all_processes_matching "#{deploy_path}/#{go_binary_name}.sh$", ssh # kill the parent script to prevent the child restarting when we interrupt it
+        sigint_all_processes_matching "#{deploy_path}/#{go_binary_name}$", ssh # interrupt the child script
+        sigkill_all_processes_matching "#{deploy_path}/#{go_binary_name}.log$", ssh # kill all log processes started by march
 
-      ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
-    end
+        sigkill_all_processes_matching "#{deploy_path}/#{existing_deploy_timestamp}/#{go_binary_name}.sh$", ssh # kill the parent script to prevent the child restarting when we interrupt it
+        sigint_all_processes_matching "#{deploy_path}/#{existing_deploy_timestamp}/#{go_binary_name}$", ssh # interrupt the child script
+        sigkill_all_processes_matching "#{deploy_path}/#{existing_deploy_timestamp}/#{go_binary_name}.log$", ssh # kill all log processes started by march
+      end
 
-    puts 'uploading binary...'
-    local_binary_path = "march/build/#{server['go_os']}"
-    remote_binary_path = "#{deploy_path}/#{go_binary_name}"
-    puts "#{local_binary_path} => #{remote_binary_path}"
-    Net::SCP.upload!(server['host'], server['user'],
-                     local_binary_path, remote_binary_path,
-                     ssh: { port: server['port'] })
-
-    puts 'uploading launch script...'
-    Net::SCP.upload!(server['host'], server['user'],
-                     local_launch_script_path,
-                     "#{deploy_path}/#{go_binary_name}.sh", # destination
-                     ssh: { port: server['port'] })
-
-    if Dir.exists? 'assets'
-      puts 'copying assets...'
-      Net::SCP.upload!(server['host'], server['user'],
-                      'assets', remote_assets_path,
-                      ssh: { port: server['port'] }, recursive: true)
-    end
-
-    puts 'starting ssh session...'
-    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
       puts 'launching binary...'
 
-      launch_command = "/usr/bin/nohup #{deploy_path}/#{go_binary_name}.sh > nohup.out &"
-      puts launch_command
+      ssh.exec!("chmod +x #{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.sh")
+      launch_command = "/usr/bin/nohup #{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.sh > nohup.out &"
+      # puts launch_command
       ssh.exec!(launch_command) do |_, stream, data|
         stdout << data if stream == :stdout
-        stderr << data if stream == :stderr
+        STDERR << data if stream == :stderr
       end
     end
   end
@@ -176,10 +201,13 @@ when :logs
       exit!
     end
 
+    existing_deploy_timestamp = get_deploy_timestamp(deploy_path, server)
+    raise "No deployed version, please call `march #{current_stage_name} deploy` first!" if existing_deploy_timestamp.nil?
+
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
       session = ssh
 
-      channel = ssh.exec("tail -f -n 50 #{deploy_path}/#{go_binary_name}.log") do |ch, stream, data|
+      channel = ssh.exec("tail -f -n 50 #{deploy_path}/#{existing_deploy_timestamp}/#{go_binary_name}.log") do |ch, stream, data|
         puts data if stream == :stdout
       end
       channel.wait

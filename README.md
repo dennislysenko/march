@@ -60,9 +60,8 @@ repository.
 ## todo
 - Reevaluate the logging system
 - Fully daemonize the go binary process so it continues running through server restarts
-- Deploy versioning (capistrano-style)
-    - rollback to previous deploys
-- Zero-downtime deployment
+- Rollback to previous deploys
+- Keep only ~5 previous deploys
 - March currently kills the child process with a SIGINT not a SIGKILL, but maybe there should be a config-specifiable
   option to send a SIGKILL after a certain amount of time.
 - Limit max length of log files (once it is over N lines, archive it to a separate logs/ directory so you can still 
