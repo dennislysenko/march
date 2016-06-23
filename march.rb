@@ -64,21 +64,28 @@ end
 
 puts current_stage_servers
 
-def get_deploy_timestamp(deploy_path, server)
-  tempfile = Tempfile.new('deploy_name')
-  Net::SCP.download!(server['host'], server['user'],
-                     "#{deploy_path}/existing_deploy_timestamp", tempfile.path,
-                     ssh: { port: server['port'] }, recursive: true)
-  contents = tempfile.read
-  # coalesce empty string to nil
-  if contents == ''
+class ServerConfig < Struct.new(:host, :user, :port, :go_os, :deploy_path)
+  def existing_deploy_timestamp
+    tempfile = Tempfile.new('deploy_name')
+    Net::SCP.download!(host, user, "#{deploy_path}/existing_deploy_timestamp", tempfile.path,
+                       ssh: { port: port }, recursive: true)
+    contents = tempfile.read
+    # coalesce empty string to nil
+    if contents == ''
+      nil
+    else
+      contents
+    end
+  rescue Net::SCP::Error
     nil
-  else
-    contents
   end
-rescue Net::SCP::Error
-  nil
 end
+
+server_configs = current_stage_servers.map do |server|
+  ServerConfig.new(server['host'], server['user'], server['port'], server['go_os'], deploy_path)
+end
+
+p server_configs
 
 case command.to_sym
 when :deploy
@@ -86,7 +93,7 @@ when :deploy
 
   puts 'building...'
   # Build the binary
-  required_oses = current_stage_servers.map { |server_config| server_config['go_os'] }.uniq
+  required_oses = server_configs.map(&:go_os).uniq
   Dir.mkdir 'march/build' unless Dir.exist? 'march/build'
   required_oses.each do |os|
     system("/bin/bash -c \"GOOS=#{os} go build -o march/build/#{os}\"")
@@ -109,38 +116,34 @@ when :deploy
   File.open(local_launch_script_path, 'w') { |f| f.write(script) }
 
   puts 'uploading...'
-  current_stage_servers.each do |server|
-    existing_deploy_timestamp = get_deploy_timestamp(deploy_path, server)
+  server_configs.each do |server|
+    existing_deploy_timestamp = server.existing_deploy_timestamp
 
-    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
+    Net::SSH.start(server.host, server.user, port: server.port) do |ssh|
       ssh.exec! "mkdir -p #{deploy_path}/#{new_deploy_timestamp}"
 
       # ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
     end
 
     puts 'uploading binary...'
-    local_binary_path = "march/build/#{server['go_os']}"
+    local_binary_path = "march/build/#{server.go_os}"
     remote_binary_path = "#{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}"
     puts "#{local_binary_path} => #{remote_binary_path}"
-    Net::SCP.upload!(server['host'], server['user'],
-                     local_binary_path, remote_binary_path,
-                     ssh: { port: server['port'] })
+    Net::SCP.upload!(server.host, server.user, local_binary_path, remote_binary_path, ssh: { port: server.port })
 
     puts 'uploading launch script...'
-    Net::SCP.upload!(server['host'], server['user'],
-                     local_launch_script_path,
-                     "#{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.sh", # destination
-                     ssh: { port: server['port'] })
+    Net::SCP.upload!(server.host, server.user, local_launch_script_path,
+                     "#{deploy_path}/#{new_deploy_timestamp}/#{go_binary_name}.sh",
+                     ssh: { port: server.port })
 
     if Dir.exists? 'assets'
       puts 'copying assets...'
-      Net::SCP.upload!(server['host'], server['user'],
-                       'assets', remote_assets_path,
-                       ssh: { port: server['port'] }, recursive: true)
+      Net::SCP.upload!(server.host, server.user, 'assets', remote_assets_path,
+                       ssh: { port: server.port }, recursive: true)
     end
 
     puts 'starting ssh session...'
-    Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
+    Net::SSH.start(server.host, server.user, port: server.port) do |ssh|
       def signal_first_match_for(matcher, ssh, signal)
         output = find_matches_for(matcher, ssh)
         pid_matches = output.match(/[1-9]\d+/)
@@ -191,7 +194,7 @@ when :deploy
 
   puts 'successfully deployed, check logs for more details'
 when :logs
-  server = current_stage_servers.first
+  server = server_configs.first
   begin
     session = nil
     channel = nil
@@ -201,7 +204,7 @@ when :logs
       exit!
     end
 
-    existing_deploy_timestamp = get_deploy_timestamp(deploy_path, server)
+    existing_deploy_timestamp = server.existing_deploy_timestamp
     raise "No deployed version, please call `march #{current_stage_name} deploy` first!" if existing_deploy_timestamp.nil?
 
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
