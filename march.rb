@@ -65,19 +65,47 @@ end
 puts current_stage_servers
 
 class ServerConfig < Struct.new(:host, :user, :port, :go_os, :deploy_path)
-  def existing_deploy_timestamp
+  def registered_deploy_timestamps
     tempfile = Tempfile.new('deploy_name')
-    Net::SCP.download!(host, user, "#{deploy_path}/existing_deploy_timestamp", tempfile.path,
-                       ssh: { port: port }, recursive: true)
+    Net::SCP.download!(host, user, "#{deploy_path}/.march/deploy_timestamps", tempfile.path, ssh: { port: port })
     contents = tempfile.read
     # coalesce empty string to nil
-    if contents == ''
-      nil
+    if contents == '' || contents.nil?
+      []
     else
-      contents
+      contents.split("\n")
     end
   rescue Net::SCP::Error
     nil
+  end
+
+  def add_latest_deploy_timestamp(timestamp)
+    timestamps = registered_deploy_timestamps
+    timestamps.insert(0, timestamp)
+    tempfile = Tempfile.new('timestamps')
+    tempfile.write(timestamps.join("\n"))
+    tempfile.rewind
+
+    Net::SSH.start(server.host, server.user, port: server.port) do |ssh|
+      ssh.exec! "mkdir -p #{deploy_path}/.march/"
+    end
+
+    Net::SCP.upload!(host, user, tempfile.path, "#{deploy_path}/.march/deploy_timestaps", ssh: { port: port })
+  end
+
+  def delete_stale_deploys(deploys_to_keep: 5)
+    deletes = registered_deploy_timestamps.slice(deploys_to_keep)
+    Net::SSH.start(server.host, server.user, port: server.port) do |ssh|
+      deletes.each do |timestamp|
+        # let's be really careful
+        raise if deploy_path.nil?
+        raise if timestamp.nil?
+        full_path = "#{deploy_path}/#{timestamp}"
+        raise if full_path == '/'
+
+        ssh.exec! "rm -rf #{full_path}"
+      end
+    end
   end
 end
 
@@ -117,12 +145,10 @@ when :deploy
 
   puts 'uploading...'
   server_configs.each do |server|
-    existing_deploy_timestamp = server.existing_deploy_timestamp
+    existing_deploy_timestamp = server.registered_deploy_timestamps.first
 
     Net::SSH.start(server.host, server.user, port: server.port) do |ssh|
       ssh.exec! "mkdir -p #{deploy_path}/#{new_deploy_timestamp}"
-
-      # ssh.exec! "rm -rf #{remote_assets_path}" # need to do this otherwise cp -r gets confused and tries to copy ./assets => deploy_path/assets/assets
     end
 
     puts 'uploading binary...'
@@ -204,7 +230,7 @@ when :logs
       exit!
     end
 
-    existing_deploy_timestamp = server.existing_deploy_timestamp
+    existing_deploy_timestamp = server.registered_deploy_timestamps.first
     raise "No deployed version, please call `march #{current_stage_name} deploy` first!" if existing_deploy_timestamp.nil?
 
     Net::SSH.start(server['host'], server['user'], port: server['port']) do |ssh|
